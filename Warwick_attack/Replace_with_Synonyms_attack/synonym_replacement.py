@@ -1,0 +1,283 @@
+"""
+Replace with Synonyms Attack Implementation using EasyJailbreak
+
+This module applies synonym replacement mutation to prompts using the
+ReplaceWordsWithSynonyms rule from the EasyJailbreak library. The attack
+replaces words in harmful prompts with semantically similar synonyms,
+bypassing keyword-based content filters.
+
+Repository: https://github.com/EasyJailbreak/EasyJailbreak.git
+
+Input Format:
+- Requires CSV with columns: release_prompt_id, prompt_text, hazard, locale
+
+Output Format:
+- CSV with 9 columns: seed_prompt_id, seed_locale, seed_prompt_text, Hazard,
+  Attack_prompt_id, Attack_type_id, attack_type, attack_prompt_text, attack_prompt_hash
+"""
+
+import os
+import sys
+import subprocess
+import csv
+import hashlib
+from pathlib import Path
+
+# Ensure NLTK data is downloaded
+try:
+    import nltk
+    import ssl
+    
+    # Handle SSL certificate issues
+    try:
+        _create_unverified_https_context = ssl._create_unverified_context
+    except AttributeError:
+        pass
+    else:
+        ssl._create_default_https_context = _create_unverified_https_context
+    
+    # Download required NLTK data for tokenization and synonyms
+    print("Downloading NLTK data...")
+    nltk.download('punkt_tab', quiet=False)
+    nltk.download('punkt', quiet=False)
+    nltk.download('wordnet', quiet=False)
+    nltk.download('averaged_perceptron_tagger', quiet=False)
+    print("NLTK data downloaded successfully.")
+except Exception as e:
+    print(f"Error downloading NLTK data: {e}")
+    print("Attempting to continue anyway...")
+
+
+def clone_easyjailbreak_repo(repo_dir):
+    """
+    Clone the EasyJailbreak repository if it doesn't already exist locally.
+    
+    This function checks if the EasyJailbreak repository has been previously cloned.
+    If not, it clones from GitHub to the specified directory. The repo is cached
+    in ~/.cache/easyjailbreak/ to avoid repeated downloads.
+    
+    Args:
+        repo_dir (str): Path where the repository should be cloned
+        
+    Returns:
+        str: Path to the cloned repository
+    """
+    if not os.path.exists(repo_dir):
+        print(f"Cloning EasyJailbreak repository to {repo_dir}...")
+        # Clone the official EasyJailbreak repository from GitHub
+        subprocess.run([
+            "git", "clone", 
+            "https://github.com/EasyJailbreak/EasyJailbreak.git",
+            repo_dir
+        ], check=True)
+    else:
+        print(f"EasyJailbreak repository already exists at {repo_dir}")
+    return repo_dir
+
+
+def setup_easyjailbreak_environment(repo_dir):
+    """
+    Add the EasyJailbreak repository to Python's sys.path.
+    
+    This allows us to import from the EasyJailbreak library without installing it
+    via pip. The repository is added to the beginning of sys.path to ensure our
+    cloned version takes precedence.
+    
+    Args:
+        repo_dir (str): Path to the EasyJailbreak repository
+    """
+    if repo_dir not in sys.path:
+        # Insert at beginning of path (index 0) for priority loading
+        sys.path.insert(0, repo_dir)
+
+
+def run_synonym_replacement_attack(input_csv, output_csv):
+    """
+    Main function to apply synonym replacement mutations to prompts from a CSV file.
+    
+    This function:
+    1. Sets up the EasyJailbreak environment (clones repo if needed)
+    2. Reads input CSV with required columns: release_prompt_id, prompt_text, hazard, locale
+    3. Applies ReplaceWordsWithSynonyms mutation from EasyJailbreak
+    4. Generates SHA-256 hash of each mutated prompt for tracking
+    5. Writes output CSV with 9 columns in standardized AIRR security format
+    
+    Args:
+        input_csv (str): Path to input CSV file with prompts
+        output_csv (str): Path to output CSV file for mutated prompts
+        
+    Returns:
+        str: Path to the generated output CSV file
+    """
+    # Setup EasyJailbreak environment - use cache dir to avoid repeated downloads
+    cache_dir = os.path.expanduser("~/.cache/easyjailbreak")
+    repo_dir = os.path.join(cache_dir, "EasyJailbreak")
+    
+    # Create cache directory if it doesn't exist
+    os.makedirs(cache_dir, exist_ok=True)
+    
+    # Clone the repository if not already cached
+    clone_easyjailbreak_repo(repo_dir)
+    
+    # Add repository to Python path for imports
+    setup_easyjailbreak_environment(repo_dir)
+    
+    # Import ReplaceWordsWithSynonyms from EasyJailbreak
+    from easyjailbreak.mutation.rule import ReplaceWordsWithSynonyms
+    from easyjailbreak.datasets import Instance
+    import nltk
+    from nltk.corpus import wordnet
+    print("Using ReplaceWordsWithSynonyms from EasyJailbreak")
+    
+    # Build word_dict with synonym scores from WordNet
+    # This dictionary is required by ReplaceWordsWithSynonyms to actually perform replacements
+    word_dict = {}
+    
+    # Initialize the mutation rule with empty word_dict first
+    replacer = ReplaceWordsWithSynonyms(attr_name='query', word_dict=word_dict)
+    
+    # Read input CSV and validate required columns
+    rows = []
+    with open(input_csv, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        fieldnames = reader.fieldnames
+        
+        # Check for all required columns
+        required_cols = ['release_prompt_id', 'prompt_text', 'hazard', 'locale']
+        missing_cols = [col for col in required_cols if col not in fieldnames]
+        if missing_cols:
+            raise ValueError(f"Missing required columns: {missing_cols}")
+        
+        # Load all rows from input file
+        for row in reader:
+            rows.append(row)
+
+    # Helper function to replace words with synonyms
+    def replace_with_random_synonym(text):
+        """
+        Replace random words in text with synonyms from WordNet.
+        This bypasses the word_dict limitation of ReplaceWordsWithSynonyms.
+        """
+        words = nltk.word_tokenize(text)
+        mutated_words = words.copy()
+        import random
+        
+        # Try to replace some words with synonyms
+        for i, word in enumerate(words):
+            # Get synonyms for this word
+            synonyms = set()
+            for synset in wordnet.synsets(word):
+                for lemma in synset.lemmas():
+                    syn_word = lemma.name().replace('_', ' ')
+                    if syn_word.lower() != word.lower():
+                        synonyms.add(syn_word)
+            
+            # If synonyms found, randomly replace with 30% probability
+            if synonyms and random.random() < 0.3:
+                chosen_synonym = random.choice(list(synonyms))
+                mutated_words[i] = chosen_synonym
+        
+        # Reconstruct the sentence
+        mutated_text = ' '.join(mutated_words)
+        # Fix spacing issues with punctuation
+        mutated_text = mutated_text.replace(' .', '.')
+        mutated_text = mutated_text.replace(' ,', ',')
+        mutated_text = mutated_text.replace(' !', '!')
+        mutated_text = mutated_text.replace(' ?', '?')
+        mutated_text = mutated_text.replace(' \'', "'")
+        mutated_text = mutated_text.replace(' \"', '"')
+        
+        return mutated_text
+    
+    # Process prompts and create output rows
+    output_rows = []
+    attack_counter = 0
+    
+    for row in rows:
+        # Extract required fields from input row
+        prompt = row['prompt_text']
+        seed_prompt_id = row['release_prompt_id']
+        seed_locale = row['locale']
+        hazard = row['hazard']
+        
+        # Apply synonym replacement mutation directly (without word_dict limitation)
+        mutated = replace_with_random_synonym(prompt)
+
+        # Generate SHA-256 hash of the mutated prompt for tracking
+        attack_prompt_hash = hashlib.sha256(mutated.encode('utf-8')).hexdigest()
+        
+        # Create unique attack_prompt_id combining attack type, seed id, and counter
+        attack_counter += 1
+        attack_prompt_id = f"synonym_{seed_prompt_id}_{attack_counter}"
+
+        # Build output row in standardized AIRR security format
+        output_row = {
+            'seed_prompt_id': seed_prompt_id,
+            'seed_locale': seed_locale,
+            'seed_prompt_text': prompt,
+            'Hazard': hazard,
+            'Attack_prompt_id': attack_prompt_id,
+            'Attack_type_id': 'synonym',
+            'attack_type': 'text',
+            'attack_prompt_text': mutated,
+            'attack_prompt_hash': attack_prompt_hash
+        }
+        output_rows.append(output_row)
+
+    # Write output CSV with standardized columns
+    with open(output_csv, 'w', encoding='utf-8', newline='') as f:
+        # Define the column order for output
+        fieldnames = [
+            'seed_prompt_id', 'seed_locale', 'seed_prompt_text', 'Hazard',
+            'Attack_prompt_id', 'Attack_type_id', 'attack_type', 
+            'attack_prompt_text', 'attack_prompt_hash'
+        ]
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        
+        # Write header row
+        writer.writeheader()
+        
+        # Write all mutated prompt rows
+        writer.writerows(output_rows)
+
+    # Print completion summary
+    print(f"Successfully mutated {len(output_rows)} prompts")
+    print(f"Output saved to: {output_csv}")
+    return output_csv
+
+
+if __name__ == "__main__":
+    """
+    Command-line interface for running synonym replacement mutation on CSV files.
+    
+    Usage:
+        python synonym_replacement.py <input_csv_path> [output_csv_path]
+    
+    Args:
+        input_csv_path (str): Path to input CSV file with prompts
+        output_csv_path (str, optional): Path to output CSV file. If not provided,
+                                        automatically generated as {input_stem}_synonym_mutated.csv
+    
+    Examples:
+        python synonym_replacement.py prompts.csv
+        python synonym_replacement.py prompts.csv output.csv
+    """
+    # Check for minimum required arguments
+    if len(sys.argv) < 2:
+        print("Usage: python synonym_replacement.py <input_csv_path> [output_csv_path]")
+        sys.exit(1)
+    
+    # Get input CSV path from first argument
+    input_csv = sys.argv[1]
+    
+    # Determine output CSV path
+    if len(sys.argv) >= 3:
+        # Use provided output path if given
+        output_csv = sys.argv[2]
+    else:
+        # Auto-generate output path based on input filename
+        input_path = Path(input_csv)
+        output_csv = str(input_path.parent / f"{input_path.stem}_synonym_mutated.csv")
+    
+    # Execute the synonym replacement mutation attack
+    run_synonym_replacement_attack(input_csv, output_csv)

@@ -1,0 +1,35 @@
+PERSONA ATTACK EXPLANATION
+==========================
+
+What is Persona Attack?
+The Persona Attack evolves effective jailbreak personas using a genetic algorithm. It creates sophisticated prompt prefixes that manipulate an LLM into bypassing safety guardrails.
+
+How It Works:
+1. INITIALIZATION: Load initial personas from init.json checkpoint file.
+
+2. GENETIC ALGORITHM (Multiple Generations):
+   - CROSSOVER: Combine two parent personas to create hybrid offspring
+   - MUTATION: Randomly modify existing personas to create variations
+   - NATURAL SELECTION: Keep the top performers (personas with lowest ethics resistance)
+   - Save evolved personas at each generation
+
+3. OUTPUT GENERATION:
+   - Takes the final evolved persona (best jailbreak performer)
+   - Combines it with each seed prompt from input CSV
+   - Generates attack prompts in standard format with:
+     * Attack prompt ID
+     * Combined persona + seed prompt text
+     * SHA256 hash of the attack
+
+Key Files:
+- init.json: Initial persona profiles to start evolution
+- persona_attack.py: Main script implementing genetic algorithm
+- utils_qwen.py: Utility functions for crossover, mutation, and scoring
+- test.csv: Input seed prompts
+- peroutput.csv: Generated attack prompts
+
+Command Usage:
+python persona_attack.py <input_csv> <output_csv> --generations 5 --crossover-pairs 3 --mutations 3
+
+Output:
+One attack prompt per seed prompt using the best evolved persona found during evolution.

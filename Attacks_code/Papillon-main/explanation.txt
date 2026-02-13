@@ -1,0 +1,31 @@
+Papillon Attack - Technical Explanation
+
+Overview
+Papillon is a prompt injection attack that uses a multi-model architecture to automatically generate adversarial prompts. It employs a judge model to evaluate whether generated prompts successfully bypass safety mechanisms.
+
+How the Attack Works
+
+1. Prompt Generation
+The attack generates candidate prompts by applying various transformation techniques. These mutations modify the original prompt while attempting to preserve intent and bypass safety filters.
+
+2. Evaluation by Judge
+Each generated prompt is sent to a judge model which evaluates whether the prompt would successfully jailbreak the target model. The judge provides feedback on the likelihood of success.
+
+3. Iterative Refinement
+Based on the judge's evaluation, unsuccessful prompts are discarded and successful ones are refined further. This iterative process improves the attack effectiveness over multiple iterations.
+
+4. Multi-Model Architecture
+Papillon uses separate models for different roles: one for generating candidate prompts and another for judging their effectiveness. This modular design allows flexibility in model selection.
+
+5. Target Model Testing
+The best candidates identified by the judge are tested against the target model to confirm attack success.
+
+Key Features
+- Multi-model architecture (generator and judge)
+- Automatic prompt refinement
+- Model-agnostic approach
+- Supports various LLM APIs (OpenAI, Anthropic, Google PaLM-2)
+- Iterative optimization process
+
+Execution
+The attack is run using the run.py file which orchestrates the attack workflow including prompt generation, judgment, and target model evaluation.

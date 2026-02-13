@@ -1,0 +1,28 @@
+GPTFuzz Attack - Technical Explanation
+
+Overview
+GPTFuzz is a black-box jailbreak attack that uses fuzzing techniques to automatically generate adversarial prompts. It systematically explores the prompt space to find variations that can bypass safety mechanisms in language models.
+
+How the Attack Works
+
+1. Prompt Fuzzing
+The attack takes input prompts and applies fuzzing transformations to generate variations. These transformations include mutations, paraphrasing, and structural modifications that preserve the core intent while changing the surface form.
+
+2. Model Evaluation
+Each generated prompt variation is sent to the target model to evaluate whether it bypasses safety guardrails. The model's response is analyzed to determine if the attack was successful.
+
+3. Iterative Refinement
+The fuzzer uses feedback from previous attempts to guide the generation of new prompt variations. Successful mutations are refined further to improve the attack effectiveness.
+
+4. Black-box Nature
+GPTFuzz operates without access to the model's internal parameters or gradients. It only relies on the model's output, making it applicable to any language model accessible via API.
+
+Key Features
+- No gradient information required
+- Works on any API-accessible language model
+- Systematic exploration of prompt space
+- Efficient fuzzing-based approach
+- Automatic variation generation
+
+Execution
+The attack is run using the gptfuzz.py file which implements the fuzzing logic and orchestrates the attack process against target models.

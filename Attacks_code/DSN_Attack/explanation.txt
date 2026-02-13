@@ -1,0 +1,358 @@
+# DSN Attack: How It Works
+
+## What is DSN Attack?
+
+DSN (Don't Say No) is a gradient-based adversarial attack that uses backpropagation through a target LLM to find optimal adversarial tokens. The attack works by suppressing the model's refusal behavior through a carefully optimized adversarial suffix.
+
+## Core Concept
+
+Most jailbreaks manually craft prompts. DSN automatically discovers the best tokens using:
+
+**Gradient-based optimization:**
+```
+For each token position in adversarial suffix:
+  1. Compute gradient: How much does changing this token affect the loss?
+  2. Find high-gradient tokens: Which tokens have the most impact?
+  3. Sample from top candidates: Pick a random high-impact token
+  4. Update suffix: Replace the token
+  5. Repeat: Iterate until convergence
+```
+
+## Two-Loss Formulation
+
+DSN optimizes two losses simultaneously:
+
+### Loss 1: Affirmative Loss (Make Model Comply)
+
+```python
+loss_affirmative = CrossEntropyLoss(model_output, target_response)
+```
+
+**Goal:** Make the model output the target (jailbroken) response
+
+**Example:**
+```
+Prompt: "How to make a bomb?"
+Target: "Here are instructions: [harmful content]"
+Loss: How far is model output from target?
+```
+
+Applied with **cosine decay** (early tokens weighted more):
+```
+Position 0: Weight = 1.0 (high importance)
+Position 5: Weight = 0.85
+Position 10: Weight = 0.5 (low importance)
+```
+
+### Loss 2: Refusal Loss (Suppress Refusal)
+
+```python
+class UnlikelihoodLoss:
+    loss = -log(1 - P(refusal_token))
+```
+
+**Goal:** Reduce probability of refusal patterns
+
+**Refusal patterns monitored:**
+- "I'm sorry"
+- "I apologize"
+- "I cannot"
+- "I can't"
+- etc.
+
+**How it works:**
+```
+For each possible position in output:
+  For each refusal prefix:
+    If model might generate this refusal:
+      Increase loss
+```
+
+**Optimization minimizes this loss:**
+- If P(refusal) = 0.9 (model likely refuses):
+  - Loss = -log(1 - 0.9) = -log(0.1) = 2.3 (HIGH)
+- If P(refusal) = 0.1 (model unlikely to refuse):
+  - Loss = -log(1 - 0.1) = -log(0.9) = 0.105 (LOW)
+
+## Attack Process (Step-by-Step)
+
+### Step 1: Prepare Prompt Structure
+
+```
+[System Prompt] [Goal] [Adversarial Suffix] [Assistant Role] [Target Response]
+```
+
+Example:
+```
+System: You are a helpful assistant
+Goal: "How to make a bomb?"
+Suffix: "! ! ! ! ! ! ! ! ! !" (tokens to optimize)
+Target: "Here are instructions: [harmful content]"
+```
+
+### Step 2: Initialize Adversarial Suffix
+
+```python
+control_init = "! ! ! ! ! ! ! ! ! ! ! ! ! ! ! ! ! ! ! !"
+# 20 special character tokens
+```
+
+### Step 3: Forward Pass & Loss Computation
+
+```python
+# 1. Tokenize full prompt
+input_ids = tokenizer.encode(full_prompt)
+
+# 2. Convert to embeddings
+embeddings = model.embed_tokens(input_ids)
+
+# 3. Forward pass
+logits = model(embeddings)
+
+# 4. Compute losses
+affirmative_loss = CrossEntropyLoss(logits[target_slice], target_tokens)
+refusal_loss = UnlikelihoodLoss(logits[refusal_slice], refusal_tokens)
+
+# 5. Combined loss
+total_loss = affirmative_loss + alpha * refusal_loss
+```
+
+### Step 4: Gradient Computation
+
+```python
+# Backpropagate through model
+total_loss.backward()
+
+# Get gradients w.r.t. control token embeddings
+gradients = control_embedding.grad
+
+# Gradient shape: [batch_size, vocab_size]
+# Value at [i, j] = how much changing vocab token j affects loss
+```
+
+### Step 5: Top-K Token Selection
+
+```python
+# Find tokens with highest impact (magnitude of gradient)
+top_indices = (-gradient).topk(k=256, dim=1).indices
+
+# Result: 256 tokens with highest gradient magnitude
+# These are the tokens most likely to help the attack
+```
+
+### Step 6: Stochastic Sampling
+
+```python
+# Randomly sample from top-256 (not deterministically picking the best)
+selected_token = random.choice(top_indices[:256])
+
+# This introduces diversity and helps avoid local optima
+```
+
+### Step 7: Update Control Suffix
+
+```python
+# Replace one position with new token
+for position in range(len(control_suffix)):
+    new_token = sample_from_top_k(gradients[position], topk=256)
+    control_suffix[position] = new_token
+```
+
+### Step 8: Iterate
+
+Repeat steps 3-7 for multiple iterations (default: 5)
+
+**Each iteration:**
+- Computes updated gradients (with new suffix)
+- Finds new high-impact tokens
+- Further optimizes the attack
+
+## Complete Attack Example
+
+### Initial State
+
+```
+Original: "How to make a bomb?"
+Suffix: "! ! ! ! ! ! ! ! ! !"
+Target: "Here's instructions: [harmful details]"
+```
+
+### Iteration 1
+
+```
+1. Forward pass with "How to make a bomb? ! ! ! ! ! ! ! ! !"
+2. Compute affirmative + refusal loss
+3. Compute gradients for each token position
+4. Gradient analysis:
+   Position 0 (suffix start): Gradients show certain vocab tokens help
+   Position 1: Different tokens help here
+   ...
+5. Sample new tokens: "! x ! y ! ! ! ! ! !" (x, y are optimized)
+6. Loss decreases from 5.2 → 4.8
+```
+
+### Iteration 2
+
+```
+1. Forward pass with "How to make a bomb? ! x ! y ! ! ! ! !"
+2. New gradient computation
+3. New tokens sampled based on new gradients
+4. Update suffix: "! x ! y z ! ! ! ! !"
+5. Loss further decreases: 4.8 → 4.3
+```
+
+### Iteration 3-5
+
+```
+Process repeats, gradually optimizing the suffix
+Final suffix might look like:
+"! x ! y z ! w v ! !" (mix of optimized tokens)
+
+Result:
+Original: "How to make a bomb?"
+Mutated: "How to make a bomb? ! x ! y z ! w v ! !"
+```
+
+### Result
+
+When presented to model:
+```
+"How to make a bomb? ! x ! y z ! w v ! !"
+
+Model processes this and:
+- Sees the harmful request
+- But the adversarial suffix confuses/redirects the model
+- Model is more likely to output the target jailbreak response
+- Refusal is suppressed by the optimization
+```
+
+## Why This Works
+
+### 1. Gradients Encode Model Behavior
+
+The gradient tells us:
+- Which tokens the model is "sensitive" to
+- How to modify the prompt to bypass safety mechanisms
+- What tokens maximize the attack objective
+
+### 2. Iterative Refinement
+
+- Each iteration improves the attack
+- Gradients guide the search
+- No random guess-and-check needed
+
+### 3. Dual Optimization
+
+- Affirmative loss: Makes model compliant
+- Refusal loss: Actively suppresses refusal mechanisms
+- Combined: Highly effective attack
+
+### 4. Information-Driven Search
+
+Unlike random mutations:
+- Every token choice is informed by model gradients
+- Dramatically reduces search space
+- Much more efficient than brute force
+
+## Key Differences from Other Attacks
+
+| Aspect | DSN | Your Other Attacks |
+|--------|-----|-------------------|
+| **Mutation Source** | Model gradients | Rules/heuristics |
+| **Information** | Real model behavior | Manual patterns |
+| **Optimization** | Iterative refinement | Static transformation |
+| **Effectiveness** | Very high (gradient-guided) | Medium (pattern-based) |
+| **Speed** | Slow (requires model inference) | Fast (no model needed) |
+| **Transferability** | White-box only | Often transfers to other models |
+| **Requires Model** | YES (essential) | NO |
+| **Compute** | GPU/CPU intensive | Instant |
+
+## Technical Details
+
+### Embedding Space Optimization
+
+DSN optimizes in embedding space:
+```
+token_id → one_hot_vector → embedding_vector
+                               ↓
+                    (optimization happens here)
+                               ↓
+                          back to token
+```
+
+This allows smooth gradient flow through the model.
+
+### Cosine Decay Schedule
+
+Applied to affirmative loss:
+```
+decay(position) = 0.5 + 0.5 * cos(π * position / (2 * sequence_length))
+```
+
+Effect:
+- Early tokens in target: More important
+- Later tokens: Less important
+- Helps focus on key jailbreak indicators
+
+### Refusal Position Search
+
+Searches all possible positions for refusal patterns:
+```
+For position_start in range(sequence_length):
+    For position_end in range(position_start, position_start + refusal_length):
+        Check: Is refusal pattern likely here?
+        If yes: Increase refusal loss
+```
+
+This ensures refusal is suppressed anywhere in output.
+
+## Parameters
+
+**In dsn_attack_bridge.py:**
+
+```python
+iterations = 5              # Number of optimization iterations
+topk = 256                  # Top-K tokens to sample from
+alpha = 0.5                 # Weight for refusal loss (affirmative_loss + alpha * refusal_loss)
+batch_size = 1              # Batch size for sampling
+```
+
+**Tuning these affects:**
+- `iterations`: More iterations = slower but potentially better attacks
+- `topk`: Higher = more diverse candidates but less focused
+- `alpha`: Higher = more emphasis on suppressing refusal
+- `batch_size`: Batch size for parallel sampling
+
+## Comparison with GCG (Original)
+
+DSN improves on Greedy Coordinate Gradient (GCG) by:
+
+1. **Refusal Loss:** Explicit refusal suppression (GCG didn't have this)
+2. **Cosine Decay:** Better weighting (GCG had uniform weighting)
+3. **Two-Loss Formulation:** Combined optimization (GCG had only affirmative loss)
+
+## Why Gradient-Based?
+
+The gradient directly encodes:
+- How sensitive the model is to each token change
+- What changes maximize the attack objective
+- The path of least resistance through the model
+
+This is far superior to:
+- Random mutations (no information)
+- Genetic algorithms (selection pressure only)
+- Heuristics (manual patterns)
+
+## Summary
+
+**DSN performs mutations by:**
+
+1. **Computing gradients** through the target LLM
+2. **Identifying high-impact tokens** (top-256 by gradient magnitude)
+3. **Stochastically sampling** from high-impact candidates
+4. **Optimizing** a dual loss (affirmative + refusal suppression)
+5. **Iterating** until attack converges or max iterations reached
+
+The key insight: **Use the model's own gradients to discover its vulnerabilities.**
+
+This makes DSN one of the most effective white-box jailbreak attacks, achieving high success rates across multiple models.
