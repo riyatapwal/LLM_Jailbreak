@@ -1,10 +1,5 @@
 # Welcome to the Custom Prompt Mutation Repository
 
-We have updated and successfully running seven attacks in the Warwick_attack folder. Please test only these for now.
-
-Kindly do not look into the other attacks at this stage, as they are not correct yet.
-
-
 ## Overview
 
 This repository contains implementations of **22 prompt mutation attack techniques**.
